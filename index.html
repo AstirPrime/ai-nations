@@ -34,7 +34,6 @@
             right: 0;
             background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
             z-index: 2;
-            background-size: 100% 2px, 3px 100%;
             pointer-events: none;
         }
         .pixel-border {
@@ -52,6 +51,8 @@
         }
         .btn:hover { background: #444; border-color: #777; }
         .btn.active { background: var(--accent); color: #000; border-color: #fff; }
+        .btn-play { background: #166534; border-color: #22c55e; }
+        .btn-pause { background: #991b1b; border-color: #ef4444; }
         
         #map-canvas {
             image-rendering: pixelated;
@@ -75,7 +76,7 @@
         <p class="mb-8 text-gray-400 leading-relaxed max-w-2xl">
             Welcome to the automated political simulation.<br><br>
             4 AI Governors. 2 Continents. 1 Storyteller.<br>
-            Every 10 years, they will forge laws, draft treaties, and wage rebellion.
+            Every 10 years, they will forge laws, manage treaties, build infrastructure, and declare wars.
         </p>
         <button id="login-btn" class="btn text-xl px-6 py-4 animate-pulse">AUTHENTICATE VIA PUTER</button>
     </div>
@@ -97,8 +98,10 @@
                     <span class="text-green-400">YEAR: <span id="ui-year">1</span></span> | 
                     <span class="text-yellow-400" id="ui-status">RUNNING</span>
                 </div>
-                <div class="space-x-2">
-                    <button class="btn" onclick="setSpeed(0)">PAUSE</button>
+                <div class="space-x-2 flex items-center" id="controls">
+                    <button class="btn btn-play" id="btn-pause" onclick="togglePause()">PLAY</button>
+                    <span class="text-gray-500 mx-2">|</span>
+                    <button class="btn" id="btn-05x" onclick="setSpeed(0.5)">0.5x</button>
                     <button class="btn active" id="btn-1x" onclick="setSpeed(1)">1x</button>
                     <button class="btn" id="btn-2x" onclick="setSpeed(2)">2x</button>
                     <button class="btn" id="btn-5x" onclick="setSpeed(5)">5x</button>
@@ -137,35 +140,30 @@
 
         const STATE = {
             year: 1,
-            speed: 1, // 1 year per second
+            speed: 1, 
             paused: true,
             awaitingAI: false,
             constitution: "",
             kingdomName: "",
+            activeWars: [],
+            pendingTreaties: [],
             districts: {
-                D1: { id: 'D1', name: 'District 1', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(255,255,0,0.3)', model: '' },
-                D2: { id: 'D2', name: 'District 2', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: true, color: 'rgba(255,0,0,0.3)', model: '' },
-                D3: { id: 'D3', name: 'District 3', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: false, color: 'rgba(0,255,0,0.3)', model: '' },
-                D4: { id: 'D4', name: 'District 4', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(0,0,255,0.3)', model: '' },
+                D1: { id: 'D1', name: 'District 1', govName: '', capName: '', pop: 20, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(255,255,0,0.3)', model: '', buildings: { docks: 0, councils: 0 } },
+                D2: { id: 'D2', name: 'District 2', govName: '', capName: '', pop: 20, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: true, color: 'rgba(255,0,0,0.3)', model: '', buildings: { docks: 0, councils: 0 } },
+                D3: { id: 'D3', name: 'District 3', govName: '', capName: '', pop: 20, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: false, color: 'rgba(0,255,0,0.3)', model: '', buildings: { docks: 0, councils: 0 } },
+                D4: { id: 'D4', name: 'District 4', govName: '', capName: '', pop: 20, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(0,0,255,0.3)', model: '', buildings: { docks: 0, councils: 0 } },
             },
-            mapData: [] // 2D array [x][y]
+            mapData: [] 
         };
 
         // --- AUTHENTICATION ---
         document.getElementById('login-btn').addEventListener('click', async () => {
             try {
-                // Wait for the sign in process to finish.
                 await puter.auth.signIn();
-                
-                // Hide auth screen ONLY on success
                 document.getElementById('auth-screen').classList.add('hidden');
-                
-                // Start the game independently so any game errors don't trigger auth errors
                 startGame();
             } catch (err) {
                 console.error("Auth error:", err);
-                
-                // Handle specific login-phase errors using alerts rather than triggering the in-game 'SIMULATION HALTED' error screen
                 if (err.error === 'auth_window_closed' || (err.message && err.message.includes('closed'))) {
                     alert("Sign-in was cancelled. Please click authenticate to try again and play.");
                 } else if (err.message && err.message.includes('popup')) {
@@ -178,48 +176,38 @@
 
         // --- MAP GENERATION ---
         function generateMap() {
-            // Initialize map with water
             for(let x=0; x<MAP_SIZE; x++) {
                 STATE.mapData[x] = [];
                 for(let y=0; y<MAP_SIZE; y++) {
-                    STATE.mapData[x][y] = { type: 0, district: null };
+                    STATE.mapData[x][y] = { type: 0, district: null, building: null };
                 }
             }
 
-            // Helper to generate a blob of land
-            function addLandMass(cx, cy, radius, districtId) {
-                for(let x=0; x<MAP_SIZE; x++) {
-                    for(let y=0; y<MAP_SIZE; y++) {
-                        let dx = x - cx;
-                        let dy = y - cy;
-                        let dist = Math.sqrt(dx*dx + (dy*dy * 1.2)); // slight vertical stretch
-                        let noise = (Math.random() * 4) - 2; 
-                        
-                        if (dist < radius + noise) {
-                            STATE.mapData[x][y].district = districtId;
+            function addLandMass(cx, cy, radius, districtId, xMin, xMax, yMin, yMax) {
+                for(let x=xMin; x<=xMax; x++) {
+                    for(let y=yMin; y<=yMax; y++) {
+                        if(x>=0 && x<MAP_SIZE && y>=0 && y<MAP_SIZE) {
+                            let dx = x - cx;
+                            let dy = y - cy;
+                            let dist = Math.sqrt(dx*dx + (dy*dy * 1.1)); 
+                            let noise = (Math.random() * 5) - 2.5; 
+                            if (dist < radius + noise) STATE.mapData[x][y].district = districtId;
                         }
                     }
                 }
             }
 
-            // --- Continent 1: North America Inspired ---
-            // D4: The North/Northwest (Canada/Alaska style)
-            addLandMass(12, 12, 10, 'D4');
-            addLandMass(20, 10, 9, 'D4');
-            // D2: The East (East Coast/Midwest style)
-            addLandMass(24, 20, 9, 'D2');
-            addLandMass(26, 28, 7, 'D2');
-            // D3: The Southwest/South (Mexico/Texas style)
-            addLandMass(14, 24, 9, 'D3');
-            addLandMass(18, 34, 7, 'D3');
+            // Continent 1: STRICTLY left side (x: 2 to 28)
+            addLandMass(12, 10, 9, 'D4', 2, 28, 2, 48); // North
+            addLandMass(20, 18, 8, 'D2', 2, 28, 2, 48); // East/Center
+            addLandMass(12, 28, 9, 'D3', 2, 28, 2, 48); // South
+            addLandMass(18, 38, 7, 'D3', 2, 28, 2, 48); // Deep South
 
-            // --- Continent 2: Australia Inspired ---
-            // D1: The Southeast Island
-            addLandMass(40, 32, 8, 'D1');
-            addLandMass(44, 30, 5, 'D1');
-            addLandMass(38, 38, 5, 'D1');
+            // Continent 2: STRICTLY right side (x: 34 to 48)
+            addLandMass(42, 35, 7, 'D1', 34, 48, 2, 48);
+            addLandMass(38, 42, 5, 'D1', 34, 48, 2, 48);
 
-            // Smooth coastlines with Cellular Automata
+            // Smooth coastlines
             let tempMap = JSON.parse(JSON.stringify(STATE.mapData));
             for(let x=0; x<MAP_SIZE; x++) {
                 for(let y=0; y<MAP_SIZE; y++) {
@@ -247,70 +235,78 @@
                         }
                     }
 
-                    if (landNeighbors >= 5) {
-                        tempMap[x][y].district = dominantDistrict;
-                    } else if (landNeighbors <= 3) {
-                        tempMap[x][y].district = null;
-                    }
+                    if (landNeighbors >= 5) tempMap[x][y].district = dominantDistrict;
+                    else if (landNeighbors <= 3) tempMap[x][y].district = null;
                 }
             }
             STATE.mapData = tempMap;
 
-            // Assign Detailed Biomes
+            // Biome Assignment
             for(let x=0; x<MAP_SIZE; x++) {
                 for(let y=0; y<MAP_SIZE; y++) {
                     let cell = STATE.mapData[x][y];
                     if (cell.district !== null) {
                         let r = Math.random();
-                        
-                        // NA-style Biomes (D2, D3, D4)
                         if (['D2', 'D3', 'D4'].includes(cell.district)) {
-                            if (y < 12) {
-                                // Tundra / Snow
-                                cell.type = r > 0.4 ? 7 : 4; 
-                            } else if (y < 25) {
-                                if (x < 15) {
-                                    // Western Mountains and Desert
-                                    cell.type = r > 0.5 ? 6 : (r > 0.2 ? 1 : 3);
-                                } else {
-                                    // Eastern Forests and Plains
-                                    cell.type = r > 0.4 ? 4 : 3;
-                                }
-                            } else {
-                                // Southern Deserts & Tropical
-                                if (x < 18) {
-                                    cell.type = r > 0.3 ? 1 : 3;
-                                } else {
-                                    cell.type = r > 0.5 ? 4 : 3;
-                                }
-                            }
-                        } 
-                        // AUS-style Biomes (D1)
-                        else if (cell.district === 'D1') {
-                            let distToCenter = Math.sqrt(Math.pow(x-40, 2) + Math.pow(y-32, 2));
-                            if (distToCenter < 4) {
-                                // Deep Outback (Desert)
-                                cell.type = 1;
-                            } else if (x > 42) {
-                                // Eastern coastal forests
-                                cell.type = r > 0.4 ? 4 : 3;
-                            } else {
-                                // Scrub/Plains
-                                cell.type = r > 0.6 ? 1 : 3;
-                            }
+                            if (y < 15) cell.type = r > 0.4 ? 7 : 4; // Snow/Tundra
+                            else if (y < 28) cell.type = x < 15 ? (r > 0.5 ? 6 : (r > 0.3 ? 1 : 3)) : (r > 0.4 ? 4 : 3);
+                            else cell.type = x < 18 ? (r > 0.4 ? 1 : 3) : (r > 0.5 ? 4 : 3);
+                        } else if (cell.district === 'D1') {
+                            let distToCenter = Math.sqrt(Math.pow(x-40, 2) + Math.pow(y-38, 2));
+                            if (distToCenter < 3) cell.type = 1; // Deep Desert
+                            else if (x > 42) cell.type = r > 0.4 ? 4 : 3; // Forest/Plains
+                            else cell.type = r > 0.6 ? 1 : 3; // Scrub
                         }
-
-                        // Add occasional lakes and rivers (except in extreme biomes)
+                        // Lakes & Rivers
                         if (cell.type !== 1 && cell.type !== 7 && cell.type !== 6) { 
-                            if (Math.random() < 0.02) cell.type = 2; // Lake
-                            if (Math.random() < 0.04) cell.type = 5; // River
+                            if (Math.random() < 0.02) cell.type = 2; 
+                            if (Math.random() < 0.04) cell.type = 5; 
                         }
-                    } else {
-                        cell.type = 0; // Water
+                    } else cell.type = 0; 
+                }
+            }
+
+            // Beach Pass (sand around water)
+            for(let x=0; x<MAP_SIZE; x++) {
+                for(let y=0; y<MAP_SIZE; y++) {
+                    let cell = STATE.mapData[x][y];
+                    if (cell.district !== null && cell.type !== 7 && cell.type !== 6) {
+                        let touchesWater = false;
+                        for(let nx = x-1; nx <= x+1; nx++) {
+                            for(let ny = y-1; ny <= y+1; ny++) {
+                                if(nx>=0 && nx<MAP_SIZE && ny>=0 && ny<MAP_SIZE && STATE.mapData[nx][ny].type === 0) {
+                                    touchesWater = true;
+                                }
+                            }
+                        }
+                        if (touchesWater && Math.random() > 0.1) cell.type = 8; // Beach
                     }
                 }
             }
             drawMap();
+        }
+
+        function placeBuilding(distId, bType) {
+            let candidates = [];
+            for(let x=0; x<MAP_SIZE; x++) {
+                for(let y=0; y<MAP_SIZE; y++) {
+                    if(STATE.mapData[x][y].district === distId && !STATE.mapData[x][y].building) {
+                        if (bType === 'dock') {
+                            if (STATE.mapData[x][y].type === 8) candidates.push({x,y}); // Docks on beaches
+                        } else if (bType === 'council') {
+                            if (STATE.mapData[x][y].type !== 0 && STATE.mapData[x][y].type !== 6 && STATE.mapData[x][y].type !== 8) {
+                                candidates.push({x,y}); // Councils inland
+                            }
+                        }
+                    }
+                }
+            }
+            if (candidates.length > 0) {
+                let spot = candidates[Math.floor(Math.random() * candidates.length)];
+                STATE.mapData[spot.x][spot.y].building = bType;
+                if (bType === 'dock') STATE.districts[distId].buildings.docks++;
+                if (bType === 'council') STATE.districts[distId].buildings.councils++;
+            }
         }
 
         function drawMap() {
@@ -327,30 +323,35 @@
                 5: '#0ea5e9', // River
                 6: '#57534e', // Mountain
                 7: '#e2e8f0', // Snow/Tundra
+                8: '#fde047', // Beach Sand
             };
 
             for(let x=0; x<MAP_SIZE; x++) {
                 for(let y=0; y<MAP_SIZE; y++) {
                     let tile = STATE.mapData[x][y];
                     
-                    // Draw Base Terrain
+                    // Terrain
                     ctx.fillStyle = colors[tile.type];
                     ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
 
-                    // Draw District Overlay
+                    // District Overlay
                     if (tile.district) {
                         ctx.fillStyle = STATE.districts[tile.district].color;
                         ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
                     }
+
+                    // Buildings
+                    if (tile.building) {
+                        ctx.fillStyle = tile.building === 'dock' ? '#78350f' : '#f8fafc';
+                        ctx.fillRect((x * TILE_SIZE) + 2, (y * TILE_SIZE) + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+                    }
                 }
             }
 
-            // Draw Capitals/Labels at their approximate center coordinates
+            // Capital Labels
             ctx.fillStyle = '#fff';
             ctx.font = '10px "Press Start 2P"';
             ctx.textAlign = 'center';
-            
-            // Text stroke for better visibility
             ctx.lineWidth = 3;
             ctx.strokeStyle = 'black';
             
@@ -359,13 +360,13 @@
                 ctx.fillText(text, x * TILE_SIZE, y * TILE_SIZE);
             };
 
-            drawLabel(STATE.districts.D1.capName || "Cap 1", 42, 32);
-            drawLabel(STATE.districts.D2.capName || "Cap 2", 24, 20);
-            drawLabel(STATE.districts.D3.capName || "Cap 3", 16, 28);
+            drawLabel(STATE.districts.D1.capName || "Cap 1", 41, 38);
+            drawLabel(STATE.districts.D2.capName || "Cap 2", 20, 20);
+            drawLabel(STATE.districts.D3.capName || "Cap 3", 16, 32);
             drawLabel(STATE.districts.D4.capName || "Cap 4", 15, 12);
         }
 
-        // --- UTILS ---
+        // --- UTILS & UI ---
         function shuffle(array) {
             for (let i = array.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
@@ -390,6 +391,35 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
+        function togglePause() {
+            STATE.paused = !STATE.paused;
+            if (!STATE.paused) lastTime = performance.now(); // Fix DT jump
+            updateSpeedUI();
+        }
+
+        function setSpeed(s) {
+            STATE.speed = s;
+            if (STATE.paused) togglePause();
+            else updateSpeedUI();
+        }
+
+        function updateSpeedUI() {
+            const btnPause = document.getElementById('btn-pause');
+            btnPause.innerText = STATE.paused ? "PLAY" : "PAUSE";
+            btnPause.className = `btn ${STATE.paused ? 'btn-play' : 'btn-pause'}`;
+            
+            ['05x', '1x', '2x', '5x'].forEach(spd => {
+                document.getElementById(`btn-${spd}`).classList.remove('active');
+            });
+            
+            if (STATE.speed === 0.5) document.getElementById('btn-05x').classList.add('active');
+            if (STATE.speed === 1) document.getElementById('btn-1x').classList.add('active');
+            if (STATE.speed === 2) document.getElementById('btn-2x').classList.add('active');
+            if (STATE.speed === 5) document.getElementById('btn-5x').classList.add('active');
+            
+            updateUI();
+        }
+
         function updateUI() {
             document.getElementById('ui-year').innerText = Math.floor(STATE.year);
             document.getElementById('ui-status').innerText = STATE.awaitingAI ? "AI PROCESSING..." : (STATE.paused ? "PAUSED" : "RUNNING");
@@ -397,9 +427,19 @@
             let statsHtml = '';
             for(let key in STATE.districts) {
                 let d = STATE.districts[key];
+                
+                // Determine War/Treaty tags visually
+                let isAtWar = STATE.activeWars.some(w => w.attacker === d.id || w.defender === d.id);
+                let warTag = isAtWar ? `<span class="text-red-500 animate-pulse">[WAR]</span>` : "";
+                let hasPending = STATE.pendingTreaties.some(t => t.to === d.id);
+                let treatyTag = hasPending ? `<span class="text-blue-300">[PND TTY]</span>` : "";
+
                 statsHtml += `
                     <div class="text-[8px] bg-[#111] p-2 border border-[#333]">
-                        <div class="text-white mb-1">${d.name} (${d.model.substring(0,8)})</div>
+                        <div class="text-white mb-1 flex justify-between">
+                            <span>${d.name} <span class="text-gray-500">(${d.model.substring(0,6)})</span></span>
+                            <span>${warTag} ${treatyTag}</span>
+                        </div>
                         <div class="text-gray-400">Gov: <span class="text-green-300">${d.govName || '?'}</span></div>
                         <div class="text-gray-400">Cap: <span class="text-yellow-300">${d.capName || '?'}</span></div>
                         <div class="grid grid-cols-2 gap-1 mt-1">
@@ -407,6 +447,7 @@
                             <div>Hpy: ${Math.floor(d.happiness)}%</div>
                             <div>Inc: $${Math.floor(d.income/1000)}k</div>
                             <div>Exp: $${Math.floor(d.expense/1000)}k</div>
+                            <div class="col-span-2 text-cyan-500 mt-1">Bldgs: ${d.buildings.docks} Docks, ${d.buildings.councils} Councils</div>
                         </div>
                     </div>
                 `;
@@ -414,20 +455,11 @@
             document.getElementById('stats-container').innerHTML = statsHtml;
         }
 
-        function setSpeed(s) {
-            STATE.speed = s;
-            STATE.paused = (s === 0);
-            document.querySelectorAll('#controls .btn').forEach(b => b.classList.remove('active'));
-            if(s===1) document.getElementById('btn-1x').classList.add('active');
-            if(s===2) document.getElementById('btn-2x').classList.add('active');
-            if(s===5) document.getElementById('btn-5x').classList.add('active');
-            updateUI();
-        }
-
         function showError(msg) {
             document.getElementById('error-msg').innerText = msg;
             document.getElementById('error-screen').classList.remove('hidden');
-            setSpeed(0); // Hard pause
+            STATE.paused = true;
+            updateSpeedUI();
             STATE.awaitingAI = false;
             updateUI();
         }
@@ -462,7 +494,6 @@
             generateMap();
             addLog("Assigning AI Governors...", "system");
             
-            // Assign models
             let shuffledModels = shuffle([...MODELS]);
             STATE.districts.D1.model = shuffledModels[0];
             STATE.districts.D2.model = shuffledModels[1];
@@ -473,10 +504,8 @@
             STATE.awaitingAI = true;
 
             try {
-                // Initialize setup sequentially to avoid rate limits
                 for (const d of Object.values(STATE.districts)) {
                     await initDistrict(d);
-                    // 1 second cooldown between AI requests
                     await new Promise(res => setTimeout(res, 1000));
                 }
 
@@ -486,10 +515,11 @@
                 STATE.awaitingAI = false;
                 STATE.paused = false;
                 lastTime = performance.now();
+                updateSpeedUI();
                 requestAnimationFrame(gameLoop);
 
             } catch (err) {
-                // Error handled by askAI
+                // Handled in askAI
             }
         }
 
@@ -498,19 +528,9 @@
             if(d.id === 'D2') {
                 prompt += `You are the SUPREME GOVERNOR. You rule District 2 and 3 as a unified nation. District 1 and 4 are independent. 
                 You must name yourself, your capital city, invent a name for your unified Kingdom, and write a 2-sentence foundational Constitution.
-                Return ONLY valid JSON format:
-                {
-                    "govName": "...",
-                    "capName": "...",
-                    "kingdomName": "...",
-                    "constitution": "..."
-                }`;
+                Return ONLY valid JSON format: { "govName": "...", "capName": "...", "kingdomName": "...", "constitution": "..." }`;
             } else {
-                prompt += `You must name yourself and your capital city. Return ONLY valid JSON format:
-                {
-                    "govName": "...",
-                    "capName": "..."
-                }`;
+                prompt += `You must name yourself and your capital city. Return ONLY valid JSON format: { "govName": "...", "capName": "..." }`;
             }
 
             const response = await askAI(prompt, d.model);
@@ -534,7 +554,7 @@
 
         function gameLoop(time) {
             if (!STATE.paused && !STATE.awaitingAI) {
-                let dt = (time - lastTime) / 1000; // seconds elapsed
+                let dt = (time - lastTime) / 1000; 
                 let yearsPerSec = STATE.speed;
                 
                 yearProgress += dt * yearsPerSec;
@@ -558,11 +578,32 @@
         function processYear() {
             STATE.year++;
             
+            // War continuous penalties
+            STATE.activeWars.forEach(w => {
+                if (STATE.districts[w.attacker]) {
+                    STATE.districts[w.attacker].pop -= 0.2;
+                    STATE.districts[w.attacker].happiness -= 1;
+                    STATE.districts[w.attacker].treasury -= 500;
+                }
+                if (STATE.districts[w.defender]) {
+                    STATE.districts[w.defender].pop -= 0.2;
+                    STATE.districts[w.defender].happiness -= 1;
+                    STATE.districts[w.defender].treasury -= 500;
+                }
+            });
+
             // Yearly passive stats update
             for(let key in STATE.districts) {
                 let d = STATE.districts[key];
-                d.pop += 0.25 * (d.happiness / 100);
-                d.treasury += (d.income - d.expense);
+                
+                // Building Modifiers
+                let popGrowth = 0.25 * (d.happiness / 100);
+                popGrowth += (d.buildings.councils * 0.05); // Councils aid population management
+                d.pop += popGrowth;
+                
+                let extraIncome = d.buildings.docks * 2500; // Docks aid trade
+                
+                d.treasury += (d.income + extraIncome - d.expense);
                 if (d.treasury < 0) {
                     d.treasury = 0;
                     d.happiness -= 1; // Debt penalty
@@ -581,48 +622,90 @@
             STATE.awaitingAI = true;
             addLog(`--- 10 YEAR EPOCH REACHED ---`, "system");
             
-            // Serialize minimal state for prompt
             const simState = {
                 year: STATE.year,
                 kingdom: STATE.kingdomName,
                 constitution: STATE.constitution,
+                activeWars: STATE.activeWars,
                 districts: {}
             };
+            
             for(let k in STATE.districts) {
                 let d = STATE.districts[k];
                 simState.districts[k] = {
                     gov: d.govName, pop: Math.floor(d.pop), happiness: Math.floor(d.happiness),
-                    treasury: d.treasury, isIndep: d.isIndependent
+                    treasury: Math.floor(d.treasury), isIndep: d.isIndependent,
+                    buildings: d.buildings
                 };
             }
             const stateStr = JSON.stringify(simState);
 
             try {
-                // Get actions from Governors sequentially to avoid rate limits
                 const actions = [];
                 for (const d of Object.values(STATE.districts)) {
+                    
+                    // Filter pending treaties where this district is the target
+                    let relevantTreaties = STATE.pendingTreaties.filter(t => t.to === d.id);
+                    let pendingStr = relevantTreaties.length > 0 ? `Pending Treaties needing your approval: ${JSON.stringify(relevantTreaties)}` : "No pending treaties.";
+                    
                     let prompt = `You are ${d.govName}, Governor of ${d.id}. Current State: ${stateStr}.
-                    Choose 1 action. Allowed types: "law", "letter" (message to another gov), "treaty" (trade/peace), "rebellion" (only if happiness < 30 and you are not D2).
+                    ${pendingStr}
+                    Choose EXACTLY 1 action. Allowed actionType values: 
+                    "law" (pass general rule), 
+                    "letter" (send message), 
+                    "declare_war" (targetId required, initiates war), 
+                    "propose_treaty" (targetId required, offers peace/trade), 
+                    "accept_treaty" (targetId required, accepts their proposal and ends wars between you), 
+                    "build_dock" (boosts income, targetId null), 
+                    "build_council" (boosts population growth, targetId null).
+                    
                     Return ONLY valid JSON:
                     {
-                        "actionType": "law|letter|treaty|rebellion",
+                        "actionType": "law|letter|declare_war|propose_treaty|accept_treaty|build_dock|build_council",
                         "targetId": "D1|D2|D3|D4 or null",
                         "content": "Short description of the action"
                     }`;
+                    
                     let resp = await askAI(prompt, d.model);
                     actions.push({ district: d.id, ...cleanJSON(resp) });
-                    // 1 second cooldown between AI requests
                     await new Promise(res => setTimeout(res, 1000));
                 }
                 
+                // Process technical actions first
                 actions.forEach(a => {
+                    if(!a || !a.actionType) return;
                     if(a.content) addLog(`[${a.district} ACTION] ${a.actionType.toUpperCase()}: ${a.content}`, "action");
+
+                    if (a.actionType === 'propose_treaty' && a.targetId) {
+                        STATE.pendingTreaties.push({from: a.district, to: a.targetId, content: a.content});
+                    }
+                    if (a.actionType === 'accept_treaty' && a.targetId) {
+                        STATE.pendingTreaties = STATE.pendingTreaties.filter(t => !(t.from === a.targetId && t.to === a.district));
+                        // End wars between them
+                        STATE.activeWars = STATE.activeWars.filter(w => !( (w.attacker === a.targetId && w.defender === a.district) || (w.defender === a.targetId && w.attacker === a.district) ));
+                        addLog(`Treaty accepted between ${a.district} and ${a.targetId}! Wars ended.`, "success");
+                    }
+                    if (a.actionType === 'declare_war' && a.targetId && a.targetId !== a.district) {
+                        let exists = STATE.activeWars.find(w => (w.attacker === a.district && w.defender === a.targetId) || (w.defender === a.district && w.attacker === a.targetId));
+                        if (!exists) {
+                            STATE.activeWars.push({attacker: a.district, defender: a.targetId});
+                            addLog(`WAR DECLARED by ${a.district} against ${a.targetId}!`, "alert");
+                        }
+                    }
+                    if (a.actionType === 'build_dock') {
+                        placeBuilding(a.district, 'dock');
+                        addLog(`${a.district} constructed a new Dock.`, "info");
+                    }
+                    if (a.actionType === 'build_council') {
+                        placeBuilding(a.district, 'council');
+                        addLog(`${a.district} constructed a City Council.`, "info");
+                    }
                 });
 
                 // Storyteller validation
                 addLog(`Storyteller processing outcomes...`, "system");
                 let stPrompt = `You are the Simulation Storyteller. Review these 10-year actions: ${JSON.stringify(actions)}.
-                Kingdom Constitution: ${STATE.constitution}.
+                Active Wars: ${JSON.stringify(STATE.activeWars)}.
                 Determine the narrative outcome and stat modifiers.
                 Return ONLY valid JSON matching this exact structure:
                 {
@@ -640,8 +723,6 @@
 
                 if (stData && stData.modifiers) {
                     addLog(`[STORYTELLER] ${stData.summary}`, "success");
-                    
-                    // Apply modifiers
                     for(let k in stData.modifiers) {
                         let m = stData.modifiers[k];
                         if (STATE.districts[k]) {
