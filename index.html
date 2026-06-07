@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Nations: Pixel Governors</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://js.puter.com/v2/"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --panel-bg: #1e1e24;
+            --border-col: #444;
+            --text-main: #e0e0e0;
+            --accent: #4ade80;
+        }
+        body {
+            font-family: 'Press Start 2P', monospace;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            margin: 0;
+            overflow: hidden;
+            font-size: 10px;
+        }
+        /* CRT Scanline Effect */
+        body::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 2;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+        .pixel-border {
+            border: 4px solid var(--border-col);
+            box-shadow: 4px 4px 0px #000;
+        }
+        .btn {
+            background: #333;
+            color: #fff;
+            border: 2px solid #555;
+            padding: 8px 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            transition: 0.1s;
+        }
+        .btn:hover { background: #444; border-color: #777; }
+        .btn.active { background: var(--accent); color: #000; border-color: #fff; }
+        
+        #map-canvas {
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #111; }
+        ::-webkit-scrollbar-thumb { background: #555; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    </style>
+</head>
+<body class="h-screen w-screen flex flex-col relative">
+
+    <!-- Auth / Login Screen -->
+    <div id="auth-screen" class="absolute inset-0 bg-black/90 z-50 flex flex-col items-center justify-center text-center p-8">
+        <h1 class="text-3xl text-green-400 mb-6 drop-shadow-[4px_4px_0_#000]">AI NATIONS SIMULATOR</h1>
+        <p class="mb-8 text-gray-400 leading-relaxed max-w-2xl">
+            Welcome to the automated political simulation.<br><br>
+            4 AI Governors. 2 Continents. 1 Storyteller.<br>
+            Every 10 years, they will forge laws, draft treaties, and wage rebellion.
+        </p>
+        <button id="login-btn" class="btn text-xl px-6 py-4 animate-pulse">AUTHENTICATE VIA PUTER</button>
+    </div>
+
+    <!-- Error / Alert Overlay -->
+    <div id="error-screen" class="hidden absolute inset-0 bg-red-900/90 z-50 flex flex-col items-center justify-center text-center p-8">
+        <h1 class="text-3xl text-white mb-6">SIMULATION HALTED</h1>
+        <p id="error-msg" class="mb-8 text-gray-200 leading-relaxed max-w-2xl"></p>
+        <button onclick="document.getElementById('error-screen').classList.add('hidden')" class="btn text-xl">DISMISS</button>
+    </div>
+
+    <!-- Main UI -->
+    <div class="flex flex-1 h-full w-full overflow-hidden">
+        
+        <!-- Map Area -->
+        <div class="flex-1 bg-black relative p-4 flex flex-col">
+            <div class="flex justify-between items-center mb-2 z-10 relative">
+                <div>
+                    <span class="text-green-400">YEAR: <span id="ui-year">1</span></span> | 
+                    <span class="text-yellow-400" id="ui-status">RUNNING</span>
+                </div>
+                <div class="space-x-2">
+                    <button class="btn" onclick="setSpeed(0)">PAUSE</button>
+                    <button class="btn active" id="btn-1x" onclick="setSpeed(1)">1x</button>
+                    <button class="btn" id="btn-2x" onclick="setSpeed(2)">2x</button>
+                    <button class="btn" id="btn-5x" onclick="setSpeed(5)">5x</button>
+                </div>
+            </div>
+            
+            <div class="flex-1 pixel-border bg-[#111] overflow-hidden relative z-10">
+                <canvas id="map-canvas" width="500" height="500"></canvas>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="w-96 bg-[#1e1e24] border-l-4 border-[#444] flex flex-col z-10 relative">
+            <div class="p-4 border-b-4 border-[#444] bg-[#222]">
+                <h2 class="text-center text-green-400 mb-2">WORLD STATS</h2>
+                <div id="stats-container" class="space-y-4 overflow-y-auto max-h-64">
+                    <!-- Stats injected via JS -->
+                </div>
+            </div>
+            
+            <div class="p-4 flex-1 flex flex-col min-h-0 bg-[#151515]">
+                <h2 class="text-center text-yellow-400 mb-2">LIVE LOG</h2>
+                <div id="log-container" class="flex-1 overflow-y-auto space-y-3 pr-2 text-[8px] leading-relaxed">
+                    <div class="text-gray-500">System initialized...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- GAME CONSTANTS & STATE ---
+        const TILE_SIZE = 10;
+        const MAP_SIZE = 50; // 50x50 tiles
+        const MODELS = ['deepseek-chat', 'deepseek-chat', 'gpt-4o-mini', 'gemini-3.5-flash'];
+        const STORYTELLER_MODEL = 'gemini-3.5-flash';
+
+        const STATE = {
+            year: 1,
+            speed: 1, // 1 year per second
+            paused: true,
+            awaitingAI: false,
+            constitution: "",
+            kingdomName: "",
+            districts: {
+                D1: { id: 'D1', name: 'District 1', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(255,255,0,0.3)', model: '' },
+                D2: { id: 'D2', name: 'District 2', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: true, color: 'rgba(255,0,0,0.3)', model: '' },
+                D3: { id: 'D3', name: 'District 3', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: false, isCapital: false, color: 'rgba(0,255,0,0.3)', model: '' },
+                D4: { id: 'D4', name: 'District 4', govName: '', capName: '', pop: 20, milPop: 0.1, treasury: 50000, income: 10000, expense: 2000, happiness: 100, isIndependent: true, isCapital: false, color: 'rgba(0,0,255,0.3)', model: '' },
+            },
+            mapData: [] // 2D array [x][y]
+        };
+
+        // --- AUTHENTICATION ---
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            try {
+                if (!puter.auth.isSignedIn()) {
+                    await puter.auth.signIn();
+                }
+                document.getElementById('auth-screen').classList.add('hidden');
+                startGame();
+            } catch (err) {
+                showError("Authentication Failed: " + err.message);
+            }
+        });
+
+        // --- MAP GENERATION ---
+        function generateMap() {
+            for(let x=0; x<MAP_SIZE; x++) {
+                STATE.mapData[x] = [];
+                for(let y=0; y<MAP_SIZE; y++) {
+                    let type = 0; // 0=water
+                    let district = null;
+
+                    // Continent 2 (Island - District 1)
+                    if (x >= 5 && x <= 15 && y >= 10 && y <= 35) {
+                        type = Math.random() > 0.8 ? 2 : 1; // 1=Desert, 2=Lake
+                        district = 'D1';
+                    }
+                    // Continent 1 (Mainland - D2, D3, D4)
+                    else if (x >= 22 && x <= 45 && y >= 5 && y <= 45) {
+                        type = Math.random() > 0.7 ? 4 : 3; // 3=Plains, 4=Forest
+                        if(Math.random() > 0.9) type = 5; // 5=River
+                        
+                        if (y < 20) district = 'D2';
+                        else if (x < 35) district = 'D3';
+                        else district = 'D4';
+                    }
+
+                    STATE.mapData[x][y] = { type, district };
+                }
+            }
+            drawMap();
+        }
+
+        function drawMap() {
+            const canvas = document.getElementById('map-canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const colors = {
+                0: '#1a365d', // Water
+                1: '#b45309', // Desert
+                2: '#0284c7', // Lake
+                3: '#4d7c0f', // Plains
+                4: '#14532d', // Forest
+                5: '#0ea5e9', // River
+            };
+
+            for(let x=0; x<MAP_SIZE; x++) {
+                for(let y=0; y<MAP_SIZE; y++) {
+                    let tile = STATE.mapData[x][y];
+                    
+                    // Draw Base Terrain
+                    ctx.fillStyle = colors[tile.type];
+                    ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+
+                    // Draw District Overlay
+                    if (tile.district) {
+                        ctx.fillStyle = STATE.districts[tile.district].color;
+                        ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+
+            // Draw Capitals/Labels
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px "Press Start 2P"';
+            ctx.textAlign = 'center';
+            
+            ctx.fillText(STATE.districts.D1.capName || "Cap 1", 10*TILE_SIZE, 22*TILE_SIZE);
+            ctx.fillText(STATE.districts.D2.capName || "Cap 2", 33*TILE_SIZE, 12*TILE_SIZE);
+            ctx.fillText(STATE.districts.D3.capName || "Cap 3", 28*TILE_SIZE, 32*TILE_SIZE);
+            ctx.fillText(STATE.districts.D4.capName || "Cap 4", 40*TILE_SIZE, 32*TILE_SIZE);
+        }
+
+        // --- UTILS ---
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+            return array;
+        }
+
+        function addLog(text, type='info') {
+            const logBox = document.getElementById('log-container');
+            const el = document.createElement('div');
+            
+            let color = 'text-gray-300';
+            if (type === 'action') color = 'text-blue-400';
+            if (type === 'system') color = 'text-yellow-400';
+            if (type === 'alert') color = 'text-red-400';
+            if (type === 'success') color = 'text-green-400';
+
+            el.className = `p-2 bg-black/50 border border-gray-800 rounded ${color}`;
+            el.innerHTML = `[Yr ${Math.floor(STATE.year)}] ${text}`;
+            logBox.appendChild(el);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function updateUI() {
+            document.getElementById('ui-year').innerText = Math.floor(STATE.year);
+            document.getElementById('ui-status').innerText = STATE.awaitingAI ? "AI PROCESSING..." : (STATE.paused ? "PAUSED" : "RUNNING");
+            
+            let statsHtml = '';
+            for(let key in STATE.districts) {
+                let d = STATE.districts[key];
+                statsHtml += `
+                    <div class="text-[8px] bg-[#111] p-2 border border-[#333]">
+                        <div class="text-white mb-1">${d.name} (${d.model.substring(0,8)})</div>
+                        <div class="text-gray-400">Gov: <span class="text-green-300">${d.govName || '?'}</span></div>
+                        <div class="text-gray-400">Cap: <span class="text-yellow-300">${d.capName || '?'}</span></div>
+                        <div class="grid grid-cols-2 gap-1 mt-1">
+                            <div>Pop: ${Math.floor(d.pop)}</div>
+                            <div>Hpy: ${Math.floor(d.happiness)}%</div>
+                            <div>Inc: $${Math.floor(d.income/1000)}k</div>
+                            <div>Exp: $${Math.floor(d.expense/1000)}k</div>
+                        </div>
+                    </div>
+                `;
+            }
+            document.getElementById('stats-container').innerHTML = statsHtml;
+        }
+
+        function setSpeed(s) {
+            STATE.speed = s;
+            STATE.paused = (s === 0);
+            document.querySelectorAll('#controls .btn').forEach(b => b.classList.remove('active'));
+            if(s===1) document.getElementById('btn-1x').classList.add('active');
+            if(s===2) document.getElementById('btn-2x').classList.add('active');
+            if(s===5) document.getElementById('btn-5x').classList.add('active');
+            updateUI();
+        }
+
+        function showError(msg) {
+            document.getElementById('error-msg').innerText = msg;
+            document.getElementById('error-screen').classList.remove('hidden');
+            setSpeed(0); // Hard pause
+            STATE.awaitingAI = false;
+            updateUI();
+        }
+
+        // --- AI INTERFACE ---
+        async function askAI(prompt, model) {
+            try {
+                const resp = await puter.ai.chat(prompt, { model: model, stream: false });
+                return resp?.message?.content || resp?.text || resp?.toString();
+            } catch (err) {
+                console.error("AI Request Failed:", err);
+                showError("Puter API Error: You may be out of credits, rate-limited, or the model is currently unavailable. \n\nDetails: " + err.message);
+                throw err;
+            }
+        }
+
+        function cleanJSON(text) {
+            if(!text) return null;
+            try {
+                let s = text.trim();
+                let match = s.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+                if (match) return JSON.parse(match[0]);
+                return JSON.parse(s);
+            } catch (e) {
+                console.error("JSON parse error:", text);
+                return null;
+            }
+        }
+
+        // --- GAME LOGIC ---
+        async function startGame() {
+            generateMap();
+            addLog("Assigning AI Governors...", "system");
+            
+            // Assign models
+            let shuffledModels = shuffle([...MODELS]);
+            STATE.districts.D1.model = shuffledModels[0];
+            STATE.districts.D2.model = shuffledModels[1];
+            STATE.districts.D3.model = shuffledModels[2];
+            STATE.districts.D4.model = shuffledModels[3];
+
+            updateUI();
+            STATE.awaitingAI = true;
+
+            try {
+                // Initialize setup asynchronously
+                const promises = Object.values(STATE.districts).map(d => initDistrict(d));
+                await Promise.all(promises);
+
+                addLog(`Kingdom formed: ${STATE.kingdomName}. Constitution enacted!`, "success");
+                addLog("Simulation starting...", "system");
+                
+                STATE.awaitingAI = false;
+                STATE.paused = false;
+                lastTime = performance.now();
+                requestAnimationFrame(gameLoop);
+
+            } catch (err) {
+                // Error handled by askAI
+            }
+        }
+
+        async function initDistrict(d) {
+            let prompt = `You are an AI governing ${d.name} in a pixelated simulation. `;
+            if(d.id === 'D2') {
+                prompt += `You are the SUPREME GOVERNOR. You rule District 2 and 3 as a unified nation. District 1 and 4 are independent. 
+                You must name yourself, your capital city, invent a name for your unified Kingdom, and write a 2-sentence foundational Constitution.
+                Return ONLY valid JSON format:
+                {
+                    "govName": "...",
+                    "capName": "...",
+                    "kingdomName": "...",
+                    "constitution": "..."
+                }`;
+            } else {
+                prompt += `You must name yourself and your capital city. Return ONLY valid JSON format:
+                {
+                    "govName": "...",
+                    "capName": "..."
+                }`;
+            }
+
+            const response = await askAI(prompt, d.model);
+            const data = cleanJSON(response);
+
+            if(data) {
+                d.govName = data.govName || "Unknown";
+                d.capName = data.capName || "Unknown City";
+                if(d.id === 'D2') {
+                    STATE.kingdomName = data.kingdomName || "The United Realm";
+                    STATE.constitution = data.constitution || "We shall rule peacefully.";
+                }
+                addLog(`${d.id} Governor ${d.govName} established ${d.capName}.`, "info");
+            } else {
+                throw new Error("Failed to parse init JSON from " + d.id);
+            }
+        }
+
+        let lastTime = 0;
+        let yearProgress = 0;
+
+        function gameLoop(time) {
+            if (!STATE.paused && !STATE.awaitingAI) {
+                let dt = (time - lastTime) / 1000; // seconds elapsed
+                let yearsPerSec = STATE.speed;
+                
+                yearProgress += dt * yearsPerSec;
+                
+                if (yearProgress >= 1) {
+                    let increments = Math.floor(yearProgress);
+                    yearProgress -= increments;
+                    
+                    for(let i=0; i<increments; i++) {
+                        processYear();
+                    }
+                }
+            }
+            
+            lastTime = time;
+            drawMap();
+            updateUI();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function processYear() {
+            STATE.year++;
+            
+            // Yearly passive stats update
+            for(let key in STATE.districts) {
+                let d = STATE.districts[key];
+                d.pop += 0.25 * (d.happiness / 100);
+                d.treasury += (d.income - d.expense);
+                if (d.treasury < 0) {
+                    d.treasury = 0;
+                    d.happiness -= 1; // Debt penalty
+                }
+                if (d.happiness > 100) d.happiness = 100;
+                if (d.happiness < 0) d.happiness = 0;
+            }
+
+            // 10-Year Epoch
+            if (STATE.year % 10 === 0) {
+                triggerAIPhase();
+            }
+        }
+
+        async function triggerAIPhase() {
+            STATE.awaitingAI = true;
+            addLog(`--- 10 YEAR EPOCH REACHED ---`, "system");
+            
+            // Serialize minimal state for prompt
+            const simState = {
+                year: STATE.year,
+                kingdom: STATE.kingdomName,
+                constitution: STATE.constitution,
+                districts: {}
+            };
+            for(let k in STATE.districts) {
+                let d = STATE.districts[k];
+                simState.districts[k] = {
+                    gov: d.govName, pop: Math.floor(d.pop), happiness: Math.floor(d.happiness),
+                    treasury: d.treasury, isIndep: d.isIndependent
+                };
+            }
+            const stateStr = JSON.stringify(simState);
+
+            try {
+                // Get actions from Governors
+                const actionPromises = Object.values(STATE.districts).map(async (d) => {
+                    let prompt = `You are ${d.govName}, Governor of ${d.id}. Current State: ${stateStr}.
+                    Choose 1 action. Allowed types: "law", "letter" (message to another gov), "treaty" (trade/peace), "rebellion" (only if happiness < 30 and you are not D2).
+                    Return ONLY valid JSON:
+                    {
+                        "actionType": "law|letter|treaty|rebellion",
+                        "targetId": "D1|D2|D3|D4 or null",
+                        "content": "Short description of the action"
+                    }`;
+                    let resp = await askAI(prompt, d.model);
+                    return { district: d.id, ...cleanJSON(resp) };
+                });
+
+                const actions = await Promise.all(actionPromises);
+                
+                actions.forEach(a => {
+                    if(a.content) addLog(`[${a.district} ACTION] ${a.actionType.toUpperCase()}: ${a.content}`, "action");
+                });
+
+                // Storyteller validation
+                addLog(`Storyteller processing outcomes...`, "system");
+                let stPrompt = `You are the Simulation Storyteller. Review these 10-year actions: ${JSON.stringify(actions)}.
+                Kingdom Constitution: ${STATE.constitution}.
+                Determine the narrative outcome and stat modifiers.
+                Return ONLY valid JSON matching this exact structure:
+                {
+                    "summary": "1-2 sentence narrative summary",
+                    "modifiers": {
+                        "D1": { "popMod": 0, "hapMod": 0, "incMod": 0, "expMod": 0 },
+                        "D2": { "popMod": 0, "hapMod": 0, "incMod": 0, "expMod": 0 },
+                        "D3": { "popMod": 0, "hapMod": 0, "incMod": 0, "expMod": 0 },
+                        "D4": { "popMod": 0, "hapMod": 0, "incMod": 0, "expMod": 0 }
+                    }
+                }`;
+
+                const stResp = await askAI(stPrompt, STORYTELLER_MODEL);
+                const stData = cleanJSON(stResp);
+
+                if (stData && stData.modifiers) {
+                    addLog(`[STORYTELLER] ${stData.summary}`, "success");
+                    
+                    // Apply modifiers
+                    for(let k in stData.modifiers) {
+                        let m = stData.modifiers[k];
+                        if (STATE.districts[k]) {
+                            STATE.districts[k].pop += (m.popMod || 0);
+                            STATE.districts[k].happiness += (m.hapMod || 0);
+                            STATE.districts[k].income += (m.incMod || 0);
+                            STATE.districts[k].expense += (m.expMod || 0);
+                        }
+                    }
+                } else {
+                    addLog("[STORYTELLER] Failed to parse consequences.", "alert");
+                }
+
+            } catch(e) {
+                // Handled in askAI, error overlay shown.
+            }
+
+            STATE.awaitingAI = false;
+        }
+
+    </script>
+</body>
+</html>
